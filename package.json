@@ -1,0 +1,32 @@
+{
+  "name": "context-io-backend",
+  "version": "1.0.0",
+  "description": "Backend API for Context.io — a professional-context translator powered by Claude.",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.96.0",
+    "@supabase/supabase-js": "^2.106.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.0.0"
+  },
+  "keywords": [
+    "context.io",
+    "translation",
+    "anthropic",
+    "claude",
+    "chrome-extension",
+    "backend"
+  ],
+  "license": "MIT"
+}
