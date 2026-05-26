@@ -388,25 +388,29 @@ async function incrementUsage(userId, by = 1, monthKey = currentMonthKey()) {
 }
 
 // ---------- Meaning rules (Pro) — unchanged from v2 ----------
-async function listMeaningRules(userId) {
+async function listMeaningRules(userId, profileId) {
   const sb = getClient();
   if (!sb) return [];
+  if (!profileId) return []; // no profile = no scoped rules; refuse to leak across profiles
 
   const { data, error } = await sb
     .from("meaning_rules")
     .select("*")
-    .eq("user_id", userId)
+    .eq("user_id",    userId)
+    .eq("profile_id", profileId)
     .order("term", { ascending: true });
   if (error) throw new Error(`rules read failed: ${error.message}`);
   return data || [];
 }
 
-async function createMeaningRule(userId, patch) {
+async function createMeaningRule(userId, profileId, patch) {
   const sb = getClient();
   if (!sb) throw new Error("supabase disabled");
+  if (!profileId) throw new Error("profile_id is required");
 
   const row = {
     user_id:               userId,
+    profile_id:            profileId,
     term:                  patch.term,
     user_meaning:          patch.user_meaning          || "",
     preferred_translation: patch.preferred_translation || "",
