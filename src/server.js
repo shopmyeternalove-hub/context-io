@@ -273,7 +273,10 @@ app.post("/translate-context", async (req, res, next) => {
     let meaningRules = [];
     if (req.user && planName === "pro") {
       try {
-        meaningRules = await supabase.listMeaningRules(req.user.id);
+const activeProfileId = await resolveActiveProfileId(req.user.id);
+        if (activeProfileId) {
+          meaningRules = await supabase.listMeaningRules(req.user.id, activeProfileId);
+        }
       } catch (err) {
         console.error("[meaning-rules] read failed (continuing without rules):", err.message);
       }
@@ -433,9 +436,25 @@ function validateProfessionProfileBody(body, { requireName }) {
 
 // ===== /meaning-rules — Pro =================================================
 
+// Helpers shared by /meaning-rules endpoints.
+async function resolveProfileId(req) {
+  const fromQuery = (req.query && typeof req.query.profile_id === "string")
+    ? req.query.profile_id.trim()
+    : "";
+  if (fromQuery) return fromQuery;
+  return resolveActiveProfileId(req.user.id);
+}
+
+async function resolveActiveProfileId(userId) {
+  const profile = await supabase.getProfile(userId);
+  return profile ? (profile.active_profile_id || null) : null;
+}
+
 app.get("/meaning-rules", requirePro("meaning_rules"), async (req, res, next) => {
   try {
-    const rules = await supabase.listMeaningRules(req.user.id);
+    const profileId = await resolveProfileId(req);
+    if (!profileId) return res.status(400).json({ error: "no active profile" });
+    const rules = await supabase.listMeaningRules(req.user.id, profileId);
     res.json({ rules });
   } catch (err) { next(err); }
 });
@@ -444,7 +463,11 @@ app.post("/meaning-rules", requirePro("meaning_rules"), async (req, res, next) =
   try {
     const v = validateMeaningRule(req.body);
     if (!v.ok) return res.status(400).json({ error: v.error });
-    const rule = await supabase.createMeaningRule(req.user.id, v.value);
+    const profileId = await resolveProfileId(req);
+    if (!profileId) return res.status(400).json({ error: "no active profile" });
+    const owns = await supabase.userOwnsProfile(req.user.id, profileId);
+    if (!owns) return res.status(403).json({ error: "profile not owned by user" });
+    const rule = await supabase.createMeaningRule(req.user.id, profileId, v.value);
     res.status(201).json({ rule });
   } catch (err) {
     if (err && /duplicate key|unique/i.test(err.message || "")) {
