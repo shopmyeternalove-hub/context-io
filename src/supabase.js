@@ -387,7 +387,22 @@ async function incrementUsage(userId, by = 1, monthKey = currentMonthKey()) {
   return data || 0;
 }
 
-// ---------- Meaning rules (Pro) — unchanged from v2 ----------
+// Ownership check used by /meaning-rules POST so a user can't create a
+// rule inside another user's profession profile.
+async function userOwnsProfile(userId, profileId) {
+  const sb = getClient();
+  if (!sb) return false;
+  const { data, error } = await sb
+    .from("profession_profiles")
+    .select("id")
+    .eq("id",      profileId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) throw new Error(`profile ownership check failed: ${error.message}`);
+  return !!data;
+}
+
+// ---------- Meaning rules (Pro) — now profile-scoped ----------
 async function listMeaningRules(userId, profileId) {
   const sb = getClient();
   if (!sb) return [];
@@ -479,6 +494,7 @@ module.exports = {
   getMonthlyUsage,
   incrementUsage,
   // meaning rules
+  userOwnsProfile,
   listMeaningRules,
   createMeaningRule,
   updateMeaningRule,
