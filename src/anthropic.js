@@ -219,19 +219,40 @@ function extractJson(raw) {
  * Normalize Claude's parsed JSON into the exact shape the extension expects.
  * Defensive against missing or extra fields.
  */
-function normalize(parsed) {
+function normalize(parsed, { meaningRules = [] } = {}) {
   const safe = (v) => (typeof v === "string" ? v.trim() : "");
+
+  // Build a lowercased lookup of rule terms for fast matching.
+  const ruleTerms = (Array.isArray(meaningRules) ? meaningRules : [])
+    .map((r) => (r && typeof r.term === "string" ? r.term.trim().toLowerCase() : ""))
+    .filter(Boolean);
+
+  // A keyTerm is "fromRule" when a rule's term appears (case-insensitive)
+  // inside either the source term or its translation. Substring match —
+  // covers "v2" matching "v2 purchases" or the translation preserving the
+  // user's preferred form.
+  function isFromRule(term, translation) {
+    if (ruleTerms.length === 0) return false;
+    const a = (term || "").toLowerCase();
+    const b = (translation || "").toLowerCase();
+    return ruleTerms.some((rt) => a.includes(rt) || b.includes(rt));
+  }
 
   let keyTerms = [];
   if (Array.isArray(parsed.keyTerms)) {
     keyTerms = parsed.keyTerms
       .filter((t) => t && typeof t === "object")
       .slice(0, 5)
-      .map((t) => ({
-        term:        safe(t.term),
-        translation: safe(t.translation),
-        note:        safe(t.note),
-      }))
+      .map((t) => {
+        const term = safe(t.term);
+        const translation = safe(t.translation);
+        return {
+          term,
+          translation,
+          note:     safe(t.note),
+          fromRule: isFromRule(term, translation),
+        };
+      })
       .filter((t) => t.term && t.translation);
   }
 
@@ -275,7 +296,7 @@ async function translateWithContext(payload, options = {}) {
     throw e;
   }
 
-  return normalize(parsed);
+  return normalize(parsed, { meaningRules: options.meaningRules });
 }
 
 module.exports = { translateWithContext };
