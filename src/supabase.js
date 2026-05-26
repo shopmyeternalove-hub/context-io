@@ -4,7 +4,10 @@
  * One module that owns:
  *   1. The Supabase admin client (uses the service role key — bypasses RLS).
  *   2. Token verification used by the auth middleware.
- *   3. Thin DB helpers for the three tables we added in schema.sql.
+ *   3. Thin DB helpers for the tables we use:
+ *        - user_profiles
+ *        - usage_monthly  (atomic via the increment_usage RPC)
+ *        - meaning_rules  (Pro feature; CRUD helpers)
  *
  * Why "admin" client?
  *   The service role key has full DB access. We never expose it to the
@@ -85,13 +88,24 @@ async function getProfile(userId) {
 /**
  * Insert-or-update the user's profile. Allowed fields are whitelisted to
  * prevent a client from setting plan/created_at/etc.
+ *
+ * Note: profile_name and professional_context require the schema columns
+ * introduced in supabase/migration-002-profile-fields.sql. If that migration
+ * hasn't been run yet, any write that includes those fields will fail with
+ * a clear Postgres "column does not exist" error.
  */
 async function upsertProfile(userId, patch) {
   const sb = getClient();
   if (!sb) throw new Error("supabase disabled");
 
   const allowed = [
-    "profession", "source_language", "target_language", "tone", "output_format",
+    "profession",
+    "professional_context",   // long-form, Pro-only (callers gate this)
+    "profile_name",           // short label, all plans
+    "source_language",
+    "target_language",
+    "tone",
+    "output_format",
   ];
   const row = { user_id: userId };
   for (const key of allowed) {
@@ -153,7 +167,7 @@ async function incrementUsage(userId, by = 1, monthKey = currentMonthKey()) {
   return data || 0;
 }
 
-// ---------- Meaning rules (used in a future Pro release) ----------
+// ---------- Meaning rules (Pro) ----------
 async function listMeaningRules(userId) {
   const sb = getClient();
   if (!sb) return [];
@@ -168,6 +182,75 @@ async function listMeaningRules(userId) {
   return data || [];
 }
 
+async function createMeaningRule(userId, patch) {
+  const sb = getClient();
+  if (!sb) throw new Error("supabase disabled");
+
+  const row = {
+    user_id:               userId,
+    term:                  patch.term,
+    user_meaning:          patch.user_meaning          || "",
+    preferred_translation: patch.preferred_translation || "",
+    avoid_translation:     patch.avoid_translation     || "",
+    example_sentence:      patch.example_sentence      || "",
+    notes:                 patch.notes                 || "",
+  };
+
+  const { data, error } = await sb
+    .from("meaning_rules")
+    .insert(row)
+    .select()
+    .single();
+
+  if (error) throw new Error(`rule create failed: ${error.message}`);
+  return data;
+}
+
+async function updateMeaningRule(userId, ruleId, patch) {
+  const sb = getClient();
+  if (!sb) throw new Error("supabase disabled");
+
+  const allowed = [
+    "term",
+    "user_meaning",
+    "preferred_translation",
+    "avoid_translation",
+    "example_sentence",
+    "notes",
+  ];
+  const row = {};
+  for (const key of allowed) {
+    if (patch[key] !== undefined && patch[key] !== null) {
+      row[key] = patch[key];
+    }
+  }
+
+  const { data, error } = await sb
+    .from("meaning_rules")
+    .update(row)
+    .eq("id", ruleId)
+    .eq("user_id", userId)  // scope to caller — defense in depth
+    .select()
+    .maybeSingle();
+
+  if (error) throw new Error(`rule update failed: ${error.message}`);
+  return data; // null if no row matched (wrong id or not the caller's row)
+}
+
+async function deleteMeaningRule(userId, ruleId) {
+  const sb = getClient();
+  if (!sb) throw new Error("supabase disabled");
+
+  const { error, count } = await sb
+    .from("meaning_rules")
+    .delete({ count: "exact" })
+    .eq("id", ruleId)
+    .eq("user_id", userId);
+
+  if (error) throw new Error(`rule delete failed: ${error.message}`);
+  return count || 0;
+}
+
 module.exports = {
   isEnabled,
   verifyAccessToken,
@@ -180,4 +263,7 @@ module.exports = {
   incrementUsage,
   // rules
   listMeaningRules,
+  createMeaningRule,
+  updateMeaningRule,
+  deleteMeaningRule,
 };

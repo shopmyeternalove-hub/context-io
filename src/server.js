@@ -6,11 +6,16 @@
  * Responsibilities:
  *   - Wire middleware: helmet, CORS, JSON parsing, rate limiting.
  *   - Expose:
- *       GET  /health           -> liveness probe
- *       POST /translate-context -> the real endpoint the Chrome extension calls
- *   - Centralize error handling so the client always gets a consistent shape:
- *       { error: string }       (on failure)
- *       { professionalMeaning, contextTranslation, genericMistake, keyTerms }  (on success)
+ *       GET  /health             -> liveness probe
+ *       GET  /me                 -> headline: identity + plan + features + usage + profile
+ *       GET  /profile            -> shaped profile read
+ *       POST /profile            -> profile write (camelCase + snake_case accepted)
+ *       POST /translate-context  -> the real endpoint the Chrome extension calls
+ *       GET    /meaning-rules    -> list  (Pro only)
+ *       POST   /meaning-rules    -> create (Pro only)
+ *       PUT    /meaning-rules/:id -> update (Pro only)
+ *       DELETE /meaning-rules/:id -> delete (Pro only)
+ *   - Centralize error handling so the client always gets a consistent shape.
  *
  * Security posture:
  *   - The Anthropic API key lives in .env on this server. It is read once at
@@ -35,9 +40,10 @@ const {
   ALLOWED_TONES,
   ALLOWED_OUTPUT_FORMATS,
 } = require("./validate");
-const { translateWithContext }  = require("./anthropic");
-const supabase                  = require("./supabase");
-const { attachUser, requireUser } = require("./auth");
+const { translateWithContext }     = require("./anthropic");
+const supabase                     = require("./supabase");
+const { attachUser, requireUser, requirePro } = require("./auth");
+const { getPlan, shapeProfileForPlan } = require("./plans");
 
 // Fail fast if required env (e.g. ANTHROPIC_API_KEY) is missing.
 validate();
@@ -68,7 +74,7 @@ const corsOptions = {
     if (allowed.includes(origin)) return callback(null, true);
     return callback(new Error(`Origin "${origin}" is not allowed by CORS.`));
   },
-  methods: ["POST", "GET", "OPTIONS"],
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
   maxAge: 86_400,
 };
@@ -91,8 +97,9 @@ const limiter = rateLimit({
 // Apply to all authenticated/expensive routes. /health stays unlimited so
 // uptime probes don't get throttled.
 app.use("/translate-context", limiter);
-app.use("/me",      limiter);
-app.use("/profile", limiter);
+app.use("/me",             limiter);
+app.use("/profile",        limiter);
+app.use("/meaning-rules",  limiter);
 
 // ---------- Routes ----------
 
@@ -112,32 +119,51 @@ app.get("/health", (_req, res) => {
 app.use(attachUser);
 
 // ----- GET /me ---------------------------------------------------------------
-// One-shot bundle used by the popup to render the signed-in panel: identity,
-// profile, plan, current usage and the limits that apply to this user.
+// One-shot bundle used by portal + popup to render the signed-in panel:
+// identity, profile (shaped to the user's plan), plan + features, current
+// usage and the limits that apply to this user.
+//
+// Response shape (kept backwards-compatible with the v1 deployed shape, plus
+// new fields the portal needs):
+//   {
+//     user:     { id, email },
+//     email:    string,
+//     profile:  { ...shaped per plan },      // includes professional_context for Pro
+//     plan:     "free" | "pro",
+//     features: { basicProfile, detailedProfile, meaningRules, ... },
+//     usage:    { used, limit, month },      // limit = null for Pro
+//     maxChars: integer,
+//   }
 app.get("/me", requireUser, async (req, res, next) => {
   try {
     const userId = req.user.id;
-    const [profile, usedThisMonth] = await Promise.all([
+    const [rawProfile, usedThisMonth] = await Promise.all([
       supabase.getProfile(userId),
       supabase.getMonthlyUsage(userId),
     ]);
 
-    const plan = (profile && profile.plan) || "free";
-    const limits = limitsForPlan(plan);
+    const planName = (rawProfile && rawProfile.plan) || "free";
+    const plan     = getPlan(planName);
+    const isPro    = planName === "pro";
+    const shaped   = shapeProfileForPlan(rawProfile, planName);
 
     res.json({
       user: {
         id:    req.user.id,
         email: req.user.email || null,
       },
-      profile: profile || null,
-      plan,
+      email:    req.user.email || null,
+      profile:  shaped,
+      plan:     planName,
+      features: plan.features,
       usage: {
         used:  usedThisMonth,
-        limit: limits.monthlyLimit,
+        // Pro is internally MAX_SAFE_INTEGER (so `used >= limit` stays simple
+        // elsewhere) but reported externally as null for cleaner JSON.
+        limit: isPro ? null : plan.monthlyLimit,
         month: supabase.currentMonthKey(),
       },
-      maxChars: limits.maxChars,
+      maxChars: plan.maxChars,
     });
   } catch (err) {
     next(err);
@@ -145,54 +171,111 @@ app.get("/me", requireUser, async (req, res, next) => {
 });
 
 // ----- GET /profile ----------------------------------------------------------
+// Returns the user's profile, shaped according to their plan.
 app.get("/profile", requireUser, async (req, res, next) => {
   try {
-    const profile = await supabase.getProfile(req.user.id);
-    res.json({ profile: profile || null });
+    const raw = await supabase.getProfile(req.user.id);
+    const planName = (raw && raw.plan) || "free";
+    res.json({ profile: shapeProfileForPlan(raw, planName) });
   } catch (err) {
     next(err);
   }
 });
 
 // ----- POST /profile ---------------------------------------------------------
-// Create or update the user's profile. Body fields are validated against the
-// same allowlists used by /translate-context so the saved values always
-// match what the translator can accept.
+// Create or update the user's profile.
+//
+// Accepts BOTH camelCase (sourceLanguage) and snake_case (source_language)
+// so the portal (which sends snake_case) and the extension (which sends
+// camelCase) can both write the same fields without translation glue.
+//
+// New fields:
+//   - profile_name (all plans)
+//   - professional_context (Pro only — silently ignored for Free so they
+//     can never write data they can't read back)
 app.post("/profile", requireUser, async (req, res, next) => {
   try {
     const body = req.body || {};
     const patch = {};
 
+    // Helper: prefer snake_case (portal style), fall back to camelCase
+    // (extension style). Returns undefined if neither key is a string.
+    const pick = (snake, camel) => {
+      if (typeof body[snake] === "string") return body[snake];
+      if (typeof body[camel] === "string") return body[camel];
+      return undefined;
+    };
+
+    // --- profile_name (short label) ---
+    const profileName = pick("profile_name", "profileName");
+    if (typeof profileName === "string") {
+      patch.profile_name = profileName.trim().slice(0, 60);
+    }
+
+    // --- profession (short, ~120 char, all plans) ---
     if (typeof body.profession === "string") {
       patch.profession = body.profession.trim().slice(0, 120);
     }
-    if (typeof body.sourceLanguage === "string") {
-      const v = body.sourceLanguage.trim().toLowerCase();
-      if (!ALLOWED_LANGS.has(v)) return res.status(400).json({ error: `sourceLanguage "${v}" not supported` });
+
+    // --- professional_context (long-form, Pro only) ---
+    // We read the user's current plan to decide whether to honor this write.
+    // Silently dropped for Free — never error — so the same client code path
+    // works for both plans.
+    const profCtx = pick("professional_context", "professionalContext");
+    if (typeof profCtx === "string") {
+      const current = await supabase.getProfile(req.user.id);
+      const planName = (current && current.plan) || "free";
+      if (planName === "pro") {
+        patch.professional_context = profCtx.slice(0, 2000);
+      }
+      // else: silently drop — feature locked
+    }
+
+    // --- source_language ---
+    const src = pick("source_language", "sourceLanguage");
+    if (typeof src === "string") {
+      const v = src.trim().toLowerCase();
+      if (!ALLOWED_LANGS.has(v)) {
+        return res.status(400).json({ error: `sourceLanguage "${v}" not supported` });
+      }
       patch.source_language = v;
     }
-    if (typeof body.targetLanguage === "string") {
-      const v = body.targetLanguage.trim().toLowerCase();
+
+    // --- target_language ---
+    const tgt = pick("target_language", "targetLanguage");
+    if (typeof tgt === "string") {
+      const v = tgt.trim().toLowerCase();
       if (!ALLOWED_LANGS.has(v) || v === "auto") {
         return res.status(400).json({ error: `targetLanguage "${v}" not supported` });
       }
       patch.target_language = v;
     }
+
+    // --- tone ---
     if (typeof body.tone === "string") {
       const v = body.tone.trim().toLowerCase();
-      if (!ALLOWED_TONES.has(v)) return res.status(400).json({ error: `tone "${v}" not supported` });
+      if (!ALLOWED_TONES.has(v)) {
+        return res.status(400).json({ error: `tone "${v}" not supported` });
+      }
       patch.tone = v;
     }
-    if (typeof body.outputFormat === "string") {
-      const v = body.outputFormat.trim().toLowerCase();
+
+    // --- output_format ---
+    const fmt = pick("output_format", "outputFormat");
+    if (typeof fmt === "string") {
+      const v = fmt.trim().toLowerCase();
       if (!ALLOWED_OUTPUT_FORMATS.has(v)) {
         return res.status(400).json({ error: `outputFormat "${v}" not supported` });
       }
       patch.output_format = v;
     }
 
-    const profile = await supabase.upsertProfile(req.user.id, patch);
-    res.json({ profile });
+    const saved = await supabase.upsertProfile(req.user.id, patch);
+
+    // Return the same shape /profile GET returns, so the client can drop the
+    // response straight into its form state without a refetch.
+    const planName = (saved && saved.plan) || "free";
+    res.json({ profile: shapeProfileForPlan(saved, planName) });
   } catch (err) {
     next(err);
   }
@@ -211,12 +294,26 @@ app.post("/translate-context", async (req, res, next) => {
     const body = { ...(req.body || {}) };
 
     // 1) If signed in, merge saved profile defaults into missing fields.
-    let plan = "free";
+    //    We also prepend long-form professional_context (Pro only) to
+    //    profession so it reaches the Claude prompt as additional lens.
+    let planName = "free";
     if (req.user) {
       const profile = await supabase.getProfile(req.user.id);
       if (profile) {
-        plan = profile.plan || "free";
-        if (!body.profession     && profile.profession)      body.profession     = profile.profession;
+        planName = profile.plan || "free";
+
+        // For Pro users with long-form context: feed it to the translator
+        // by combining short + long into the `profession` field that the
+        // prompt builder already understands. (We never mutate the saved
+        // row — just the request body for this call.)
+        const isPro = planName === "pro";
+        const longCtx = isPro ? (profile.professional_context || "").trim() : "";
+        const shortPro = (profile.profession || "").trim();
+        const merged = longCtx
+          ? (shortPro ? `${shortPro}\n\n${longCtx}` : longCtx)
+          : shortPro;
+
+        if (!body.profession && merged)            body.profession     = merged;
         if (!body.sourceLanguage && profile.source_language) body.sourceLanguage = profile.source_language;
         if (!body.targetLanguage && profile.target_language) body.targetLanguage = profile.target_language;
         if (!body.tone           && profile.tone)            body.tone           = profile.tone;
@@ -230,7 +327,7 @@ app.post("/translate-context", async (req, res, next) => {
 
     // 3) Enforce plan limits BEFORE calling Claude.
     if (req.user) {
-      const limits = limitsForPlan(plan);
+      const limits = getPlan(planName);
 
       // Per-request character cap.
       if (v.value.text.length > limits.maxChars) {
@@ -240,7 +337,8 @@ app.post("/translate-context", async (req, res, next) => {
         });
       }
 
-      // Monthly translation cap.
+      // Monthly translation cap. (Pro's monthlyLimit = MAX_SAFE_INTEGER, so
+      // this check is effectively a no-op for them.)
       const used = await supabase.getMonthlyUsage(req.user.id);
       if (used >= limits.monthlyLimit) {
         return res.status(402).json({
@@ -268,20 +366,91 @@ app.post("/translate-context", async (req, res, next) => {
   }
 });
 
-// Plan-based limits. Free uses the env-configured caps; pro is currently
-// "no cap" (we use Number.MAX_SAFE_INTEGER so the existing code path stays
-// simple — no special-casing needed). Tighten later if pro gets metered.
-function limitsForPlan(plan) {
-  if (plan === "pro") {
-    return {
-      monthlyLimit: Number.MAX_SAFE_INTEGER,
-      maxChars:     config.limits.maxTextLength,
-    };
+// ----- /meaning-rules — Pro feature -----------------------------------------
+// All four methods are gated by requirePro("meaning_rules") which returns
+// 401 if unauthenticated and 403 { error: "upgrade_required", feature, plan }
+// for signed-in Free users. That 403 is what the portal's RequirePro guard
+// distinguishes from a real error.
+
+// GET — list all rules for the signed-in user
+app.get("/meaning-rules", requirePro("meaning_rules"), async (req, res, next) => {
+  try {
+    const rules = await supabase.listMeaningRules(req.user.id);
+    res.json({ rules });
+  } catch (err) {
+    next(err);
   }
-  return {
-    monthlyLimit: config.freeTier.monthlyLimit,
-    maxChars:     config.freeTier.maxChars,
-  };
+});
+
+// POST — create a rule
+app.post("/meaning-rules", requirePro("meaning_rules"), async (req, res, next) => {
+  try {
+    const v = validateMeaningRule(req.body);
+    if (!v.ok) return res.status(400).json({ error: v.error });
+    const rule = await supabase.createMeaningRule(req.user.id, v.value);
+    res.status(201).json({ rule });
+  } catch (err) {
+    // Unique-violation on (user_id, term) — return a friendly 409.
+    if (err && /duplicate key|unique/i.test(err.message || "")) {
+      return res.status(409).json({ error: "A rule for this term already exists." });
+    }
+    next(err);
+  }
+});
+
+// PUT — update a rule
+app.put("/meaning-rules/:id", requirePro("meaning_rules"), async (req, res, next) => {
+  try {
+    const id = String(req.params.id || "").trim();
+    if (!id) return res.status(400).json({ error: "missing id" });
+
+    const v = validateMeaningRule(req.body, { partial: true });
+    if (!v.ok) return res.status(400).json({ error: v.error });
+
+    const rule = await supabase.updateMeaningRule(req.user.id, id, v.value);
+    if (!rule) return res.status(404).json({ error: "rule not found" });
+    res.json({ rule });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE — delete a rule
+app.delete("/meaning-rules/:id", requirePro("meaning_rules"), async (req, res, next) => {
+  try {
+    const id = String(req.params.id || "").trim();
+    if (!id) return res.status(400).json({ error: "missing id" });
+    const removed = await supabase.deleteMeaningRule(req.user.id, id);
+    if (!removed) return res.status(404).json({ error: "rule not found" });
+    res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Validation for the meaning-rule body. Keeps the route handlers focused.
+// `partial` mode allows missing `term` (used by PUT).
+function validateMeaningRule(body, { partial = false } = {}) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, error: "Request body must be a JSON object." };
+  }
+  const out = {};
+  const str = (v) => (typeof v === "string" ? v : "");
+
+  if (typeof body.term === "string") {
+    const t = body.term.trim().slice(0, 80);
+    if (!t && !partial) return { ok: false, error: "`term` is required." };
+    if (t) out.term = t;
+  } else if (!partial) {
+    return { ok: false, error: "`term` is required and must be a string." };
+  }
+
+  for (const f of ["user_meaning", "preferred_translation", "avoid_translation", "example_sentence", "notes"]) {
+    if (body[f] !== undefined) {
+      out[f] = str(body[f]).slice(0, 500);
+    }
+  }
+  return { ok: true, value: out };
 }
 
 // ---------- 404 ----------
