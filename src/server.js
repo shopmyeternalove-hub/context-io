@@ -265,7 +265,21 @@ app.post("/translate-context", async (req, res, next) => {
       }
     }
 
-    const result = await translateWithContext(v.value);
+    // Load the user's meaning rules (Pro-only feature). These are injected
+    // into the translator's prompt as a domain glossary so terms like "v2"
+    // or "v8" carry their professional meaning into the output.
+    // Failure here must NOT block translation — fall back to no rules and
+    // log the error.
+    let meaningRules = [];
+    if (req.user && planName === "pro") {
+      try {
+        meaningRules = await supabase.listMeaningRules(req.user.id);
+      } catch (err) {
+        console.error("[meaning-rules] read failed (continuing without rules):", err.message);
+      }
+    }
+
+    const result = await translateWithContext(v.value, { meaningRules });
 
     if (req.user) {
       supabase.incrementUsage(req.user.id, 1).catch((err) => {

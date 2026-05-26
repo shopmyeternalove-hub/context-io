@@ -134,7 +134,33 @@ function formatDescription(f) {
 /**
  * Build the user-turn content for a given request.
  */
-function buildUserMessage({ text, profession, sourceLanguage, targetLanguage, tone, outputFormat }) {
+function formatRulesBlock(rules) {
+  if (!Array.isArray(rules) || rules.length === 0) return [];
+
+  const lines = [
+    `DOMAIN GLOSSARY (highest priority — these override generic translation):`,
+    `The user has defined the following terms from their professional world.`,
+    `When any of these terms appear in the source text, you MUST preserve the`,
+    `user's meaning, use the preferred translation, and avoid the listed`,
+    `incorrect renderings. Reflect rule adherence in keyTerms when relevant.`,
+    ``,
+  ];
+
+  for (const r of rules) {
+    if (!r || !r.term) continue;
+    lines.push(`- Term: "${r.term}"`);
+    if (r.user_meaning)          lines.push(`  Means: ${r.user_meaning}`);
+    if (r.preferred_translation) lines.push(`  Preferred translation: ${r.preferred_translation}`);
+    if (r.avoid_translation)     lines.push(`  Avoid: ${r.avoid_translation}`);
+    if (r.example_sentence)      lines.push(`  Example: "${r.example_sentence}"`);
+    if (r.notes)                 lines.push(`  Notes: ${r.notes}`);
+  }
+
+  lines.push(``);
+  return lines;
+}
+
+function buildUserMessage({ text, profession, sourceLanguage, targetLanguage, tone, outputFormat }, { meaningRules = [] } = {}) {
   const professionLine = profession
     ? `Profession / domain (controls MEANING): ${profession}`
     : `Profession / domain: (not specified — use careful general-purpose translation)`;
@@ -150,6 +176,7 @@ function buildUserMessage({ text, profession, sourceLanguage, targetLanguage, to
     `TONE (controls ATTITUDE AND POLISH): ${tone}`,
     `Tone guidance: ${toneDescription(tone)}`,
     ``,
+    ...formatRulesBlock(meaningRules),
     `The "contextTranslation" field MUST reflect both the outputFormat and the tone, while preserving the exact professional meaning, certainty, risk level, intent, and domain implications of the source. The other fields (professionalMeaning, genericMistake, keyTerms) stay neutral and explanatory.`,
     ``,
     `Source text:`,
@@ -222,8 +249,8 @@ function normalize(parsed) {
  * @param {object} payload - validated request body
  * @returns {Promise<{professionalMeaning, contextTranslation, genericMistake, keyTerms}>}
  */
-async function translateWithContext(payload) {
-  const userMessage = buildUserMessage(payload);
+async function translateWithContext(payload, options = {}) {
+  const userMessage = buildUserMessage(payload, options);
 
   const response = await getClient().messages.create({
     model: config.anthropic.model,
