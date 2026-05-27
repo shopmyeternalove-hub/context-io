@@ -122,7 +122,7 @@ app.get("/me", requireUser, async (req, res, next) => {
       features: plan.features,
       usage: {
         used:  usedThisMonth,
-        limit: isPro ? null : plan.monthlyLimit,
+        limit: plan.monthlyLimit,
         month: supabase.currentMonthKey(),
       },
       maxChars: plan.maxChars,
