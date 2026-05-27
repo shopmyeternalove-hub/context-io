@@ -279,7 +279,7 @@ async function translateWithContext(payload, options = {}) {
 
   const response = await getClient().messages.create({
     model,
-    max_tokens: 4096,
+    max_tokens: 8192,
     system: SYSTEM_PROMPT,
     messages: [{ role: "user", content: userMessage }],
   });
