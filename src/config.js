@@ -37,6 +37,12 @@ const config = {
   anthropic: {
     apiKey: process.env.ANTHROPIC_API_KEY,
     model:  process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6",
+    // Backend-only routing: fast for default work, deep for heavy work.
+    // Both fall back to `model` so existing deployments keep working
+    // without setting the new vars. Never returned to the client.
+    fastModel: process.env.ANTHROPIC_FAST_MODEL || process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6",
+    deepModel: process.env.ANTHROPIC_DEEP_MODEL || process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6",
+    debugRouting: process.env.DEBUG_MODEL_ROUTING === "true",
   },
 
   supabase: {
@@ -50,6 +56,11 @@ const config = {
   freeTier: {
     monthlyLimit: intEnv("FREE_MONTHLY_LIMIT", 50),
     maxChars:     intEnv("FREE_MAX_CHARS", 700),
+  },
+
+  proTier: {
+    monthlyLimit: intEnv("PRO_MONTHLY_LIMIT", 2000),
+    maxChars:     intEnv("PRO_MAX_CHARS", 4000),
   },
 
   cors: {
