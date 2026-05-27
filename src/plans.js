@@ -38,8 +38,8 @@ const PRO = {
     multipleProfiles:  true,
     savedTerminology:  true,
   },
-  monthlyLimit:    Number.MAX_SAFE_INTEGER,
-  maxChars:        config.limits.maxTextLength,
+  monthlyLimit:    config.proTier.monthlyLimit,
+  maxChars:        config.proTier.maxChars,
   maxProfiles:     Number.POSITIVE_INFINITY,  // unlimited on Pro
   maxMeaningRules: 200,
 };

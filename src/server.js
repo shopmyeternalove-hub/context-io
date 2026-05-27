@@ -40,6 +40,7 @@ const {
   ALLOWED_OUTPUT_FORMATS,
 } = require("./validate");
 const { translateWithContext }     = require("./anthropic");
+const { chooseModelForTranslation } = require("./routing");
 const supabase                     = require("./supabase");
 const { attachUser, requireUser, requirePro } = require("./auth");
 const { getPlan, shapeProfileForPlan } = require("./plans");
@@ -282,11 +283,48 @@ const activeProfileId = await resolveActiveProfileId(req.user.id);
       }
     }
 
-    const result = await translateWithContext(v.value, { meaningRules });
+    // Backend-only model routing. Pick fast (Haiku) by default; switch to
+    // deep (Sonnet) only on clearly heavier requests. The user never sees
+    // this decision — no UI, no response field unless DEBUG_MODEL_ROUTING.
+    const routing = chooseModelForTranslation({
+      userPlan:            planName,
+      text:                v.value.text,
+      professionalProfile: v.value.profession,    // already merged: short profession + long context
+      meaningRules,
+      outputFormat:        v.value.outputFormat,
+    });
+
+    const result = await translateWithContext(v.value, {
+      meaningRules,
+      model: routing.model,
+    });
+
+    // Structured one-line log per successful translation. No PII, no text.
+    console.log("[translate]", JSON.stringify({
+      user_id:             req.user ? req.user.id : null,
+      plan:                planName,
+      model_used:          routing.model,
+      model_tier:          routing.modelTier,
+      routing_reason:      routing.routingReason,
+      complexity_score:    routing.complexityScore,
+      character_count:     v.value.text.length,
+      meaning_rules_count: meaningRules.length,
+    }));
 
     if (req.user) {
       supabase.incrementUsage(req.user.id, 1).catch((err) => {
         console.error("[usage] increment failed:", err.message);
+      });
+    }
+
+    if (config.anthropic.debugRouting) {
+      return res.json({
+        ...result,
+        _debug: {
+          modelTier:       routing.modelTier,
+          routingReason:   routing.routingReason,
+          complexityScore: routing.complexityScore,
+        },
       });
     }
 

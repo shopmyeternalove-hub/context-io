@@ -273,8 +273,12 @@ function normalize(parsed, { meaningRules = [] } = {}) {
 async function translateWithContext(payload, options = {}) {
   const userMessage = buildUserMessage(payload, options);
 
+  // Backend chooses the model via routing (see src/routing.js). If no model
+  // is passed, fall back to config.anthropic.model — same behavior as before.
+  const model = options.model || config.anthropic.model;
+
   const response = await getClient().messages.create({
-    model: config.anthropic.model,
+    model,
     max_tokens: 1024,
     system: SYSTEM_PROMPT,
     messages: [{ role: "user", content: userMessage }],
