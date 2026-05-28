@@ -21,6 +21,28 @@
 
 const { config } = require("./config");
 
+// Languages that are hard enough to translate well that we always send them
+// to the deep model (Sonnet), regardless of length or other factors. These
+// are either non-Latin scripts, morphologically rich, lower-resource, or
+// otherwise error-prone for a fast model:
+//   he Hebrew, ar Arabic, zh Chinese, ja Japanese, ko Korean,
+//   hi Hindi, tr Turkish, pl Polish
+// A request hard-triggers Sonnet if its source OR target is in this set.
+// Source "auto" also hard-triggers, since we can't know the language before
+// the model runs and would rather pay for quality than risk a hard language
+// going to the fast model.
+const COMPLEX_LANGUAGES = new Set([
+  "he", "ar", "zh", "ja", "ko", "hi", "tr", "pl",
+]);
+
+function isComplexLanguagePair(sourceLanguage, targetLanguage) {
+  const src = (sourceLanguage || "").toLowerCase();
+  const tgt = (targetLanguage || "").toLowerCase();
+  // Unresolved source — assume it could be a complex language.
+  if (src === "auto") return true;
+  return COMPLEX_LANGUAGES.has(src) || COMPLEX_LANGUAGES.has(tgt);
+}
+
 // Output formats that, on their own, push us toward Sonnet.
 // "report" and "formal-document" are the heavy ones in this codebase
 // (see anthropic.js FORMAT_DESCRIPTIONS). "client-update" stays on fast
@@ -71,6 +93,8 @@ function chooseModelForTranslation({
   professionalProfile,
   meaningRules,
   outputFormat,
+  sourceLanguage,
+  targetLanguage,
 }) {
   // Defensive coercion — caller may pass undefined.
   const t        = typeof text === "string" ? text : "";
@@ -90,6 +114,16 @@ function chooseModelForTranslation({
 
   // ----- Hard triggers — override everything else -----
   // Per spec: these flip to Sonnet regardless of score.
+
+  // Complex source/target language (or unresolved "auto" source) → always
+  // Sonnet. Translation quality on these languages matters more than the
+  // cost saving from Haiku.
+  if (isComplexLanguagePair(sourceLanguage, targetLanguage)) {
+    const src = (sourceLanguage || "").toLowerCase();
+    const tgt = (targetLanguage || "").toLowerCase();
+    const why = src === "auto" ? "auto_source" : `${src}->${tgt}`;
+    return finalize("deep", `complex_language (${why})`, 999, fastModel(), deepModel());
+  }
   if (textLen > 2500) {
     return finalize("deep", `text_length_over_2500 (${textLen})`, 999, fastModel(), deepModel());
   }
