@@ -292,6 +292,8 @@ const activeProfileId = await resolveActiveProfileId(req.user.id);
       professionalProfile: v.value.profession,    // already merged: short profession + long context
       meaningRules,
       outputFormat:        v.value.outputFormat,
+      sourceLanguage:      v.value.sourceLanguage,
+      targetLanguage:      v.value.targetLanguage,
     });
 
     const result = await translateWithContext(v.value, {
