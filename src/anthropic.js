@@ -72,6 +72,29 @@ change any of these:
   - Any domain-specific implications a professional would read into the
     phrasing.
 
+NO-EQUIVALENT TERMS — many English professional terms are metaphors or idioms
+that have NO natural equivalent in the target language ("long tail", "low-
+hanging fruit", "scale winners", "burn rate", "deep dive"). For each such term,
+decide in this order:
+  1. If the DOMAIN GLOSSARY below defines the term, obey the glossary exactly.
+     The glossary always wins over the rules in this section.
+  2. If the target language has a genuine, idiomatic professional equivalent,
+     use it.
+  3. If there is no idiomatic equivalent: PREFER keeping the English term as-is
+     when professionals in the target language actually use that English term in
+     their daily work (e.g. "CPA", "CTR", "ROI", "retargeting", "long tail" among
+     ad professionals). When unsure whether a term is used in English by target-
+     language professionals, lean toward keeping the recognized English jargon.
+  4. Only if the term is NOT used in English by those professionals, translate
+     its underlying MEANING into the target language (e.g. render "long-tail
+     specifiers" by its meaning — narrow, low-volume targeting — rather than a
+     literal body-part calque).
+NEVER produce a literal word-for-word calque of a metaphor that would read as
+nonsense or as the wrong (literal) image in the target language. A reader in the
+target language must never see a phrase that, taken literally, points at the
+wrong concept. This applies to BOTH contextTranslation AND the keyTerms
+translations.
+
 You ALWAYS respond with a single JSON object and nothing else. No prose
 outside the JSON, no markdown fences, no explanation. The JSON must contain
 exactly these keys:
