@@ -227,7 +227,7 @@ app.post("/profile", requireUser, async (req, res, next) => {
 
 // ----- POST /translate-context -----------------------------------------------
 // Unchanged in shape; consumes the joined profile view via supabase.getProfile.
-app.post("/translate-context", async (req, res, next) => {
+app.post("/translate-context", requireUser, async (req, res, next) => {
   try {
     const body = { ...(req.body || {}) };
 
