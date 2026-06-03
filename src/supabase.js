@@ -475,6 +475,31 @@ async function deleteMeaningRule(userId, ruleId) {
   return count || 0;
 }
 
+// ---------- Billing / Paddle ----------
+async function applySubscriptionState(userId, fields) {
+  const sb = getClient();
+  if (!sb) return;
+  const patch = {
+    plan:                fields.plan,
+    subscription_status: fields.subscription_status ?? null,
+  };
+  // Only overwrite ids when present, so an event missing them can't null them out.
+  if (fields.paddle_customer_id)     patch.paddle_customer_id     = fields.paddle_customer_id;
+  if (fields.paddle_subscription_id) patch.paddle_subscription_id = fields.paddle_subscription_id;
+  await sb.from("user_profiles").update(patch).eq("user_id", userId);
+}
+
+async function findUserByPaddleSubscription(subId) {
+  const sb = getClient();
+  if (!sb) return null;
+  const { data } = await sb
+    .from("user_profiles")
+    .select("user_id")
+    .eq("paddle_subscription_id", subId)
+    .maybeSingle();
+  return data?.user_id || null;
+}
+
 module.exports = {
   isEnabled,
   verifyAccessToken,
@@ -499,4 +524,7 @@ module.exports = {
   createMeaningRule,
   updateMeaningRule,
   deleteMeaningRule,
+  // billing / paddle
+  applySubscriptionState,
+  findUserByPaddleSubscription,
 };

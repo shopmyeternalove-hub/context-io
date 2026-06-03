@@ -44,6 +44,7 @@ const { chooseModelForTranslation } = require("./routing");
 const supabase                     = require("./supabase");
 const { attachUser, requireUser, requirePro } = require("./auth");
 const { getPlan, shapeProfileForPlan } = require("./plans");
+const paddle = require("./paddle");
 
 validate();
 
@@ -70,6 +71,33 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
+
+// ---------- Paddle webhooks ----------
+// MUST be registered BEFORE express.json() below: signature verification needs
+// the raw request bytes, so this route parses its body as a Buffer instead.
+// No auth middleware — Paddle requests are verified by signature, not session.
+app.post("/webhooks/paddle", express.raw({ type: "application/json" }), async (req, res) => {
+  const signature = req.headers["paddle-signature"] || "";
+  const rawBody = req.body ? req.body.toString() : "";
+  if (!signature || !rawBody) return res.status(400).json({ error: "bad_request" });
+
+  let event;
+  try {
+    event = await paddle.unmarshalWebhook(rawBody, signature);
+  } catch (err) {
+    console.error("[paddle] signature verification failed:", err && err.message);
+    return res.status(401).json({ error: "invalid_signature" });
+  }
+
+  try {
+    await paddle.handlePaddleEvent(event);
+    return res.status(200).json({ received: true });
+  } catch (err) {
+    console.error("[paddle] handler error:", err && err.message);
+    // 500 so Paddle retries; our update is idempotent, so retries are safe.
+    return res.status(500).json({ error: "handler_error" });
+  }
+});
 
 // ---------- Body parsing ----------
 app.use(express.json({ limit: "64kb" }));

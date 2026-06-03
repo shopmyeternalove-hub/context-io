@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",
+    "@paddle/paddle-node-sdk": "^3.8.0",
     "@supabase/supabase-js": "^2.106.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
