@@ -479,14 +479,21 @@ async function deleteMeaningRule(userId, ruleId) {
 async function applySubscriptionState(userId, fields) {
   const sb = getClient();
   if (!sb) return;
-  const patch = {
+  // upsert (not update): a user can pay before ever saving a profile, so no
+  // user_profiles row may exist yet — an update would silently match zero rows.
+  // onConflict user_id creates the row if missing, or patches the existing one.
+  const row = {
+    user_id:             userId,
     plan:                fields.plan,
     subscription_status: fields.subscription_status ?? null,
   };
-  // Only overwrite ids when present, so an event missing them can't null them out.
-  if (fields.paddle_customer_id)     patch.paddle_customer_id     = fields.paddle_customer_id;
-  if (fields.paddle_subscription_id) patch.paddle_subscription_id = fields.paddle_subscription_id;
-  await sb.from("user_profiles").update(patch).eq("user_id", userId);
+  // Only set ids when present, so an event missing them can't null them out.
+  if (fields.paddle_customer_id)     row.paddle_customer_id     = fields.paddle_customer_id;
+  if (fields.paddle_subscription_id) row.paddle_subscription_id = fields.paddle_subscription_id;
+  const { error } = await sb
+    .from("user_profiles")
+    .upsert(row, { onConflict: "user_id" });
+  if (error) throw new Error(`applySubscriptionState failed: ${error.message}`);
 }
 
 async function findUserByPaddleSubscription(subId) {
