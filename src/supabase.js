@@ -507,6 +507,17 @@ async function findUserByPaddleSubscription(subId) {
   return data?.user_id || null;
 }
 
+async function getPaddleSubscriptionId(userId) {
+  const sb = getClient();
+  if (!sb) return null;
+  const { data } = await sb
+    .from("user_profiles")
+    .select("paddle_subscription_id")
+    .eq("user_id", userId)
+    .maybeSingle();
+  return data?.paddle_subscription_id || null;
+}
+
 module.exports = {
   isEnabled,
   verifyAccessToken,
@@ -534,4 +545,5 @@ module.exports = {
   // billing / paddle
   applySubscriptionState,
   findUserByPaddleSubscription,
+  getPaddleSubscriptionId,
 };

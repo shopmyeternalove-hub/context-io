@@ -567,6 +567,21 @@ app.delete("/meaning-rules/:id", requirePro("meaning_rules"), async (req, res, n
   } catch (err) { next(err); }
 });
 
+// ---------- POST /subscription/cancel ----------
+// In-app cancel: schedules cancellation at the end of the current billing
+// period (the user keeps Pro until then). Paddle sends subscription.canceled
+// when it lapses, which flips plan -> free via the webhook handler.
+app.post("/subscription/cancel", requireUser, async (req, res, next) => {
+  try {
+    const subId = await supabase.getPaddleSubscriptionId(req.user.id);
+    if (!subId) return res.status(404).json({ error: "no_subscription" });
+    await paddle.cancelSubscription(subId);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 function validateMeaningRule(body, { partial = false } = {}) {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return { ok: false, error: "Request body must be a JSON object." };

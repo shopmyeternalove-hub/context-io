@@ -88,4 +88,13 @@ async function handlePaddleEvent(event) {
   );
 }
 
-module.exports = { getPaddle, unmarshalWebhook, handlePaddleEvent };
+// Schedule cancellation for the end of the current billing period; the
+// customer keeps Pro until then. subscription.canceled fires at period end,
+// which flips plan -> free via handlePaddleEvent.
+async function cancelSubscription(subscriptionId) {
+  const p = getPaddle();
+  if (!p) throw new Error("paddle_not_configured");
+  return p.subscriptions.cancel(subscriptionId, { effectiveFrom: "next_billing_period" });
+}
+
+module.exports = { getPaddle, unmarshalWebhook, handlePaddleEvent, cancelSubscription };
