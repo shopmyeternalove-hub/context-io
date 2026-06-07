@@ -124,6 +124,7 @@ async function getProfile(userId) {
     tone:              userRow.tone || "natural-professional",
     output_format:     userRow.output_format || "auto",
     active_profile_id: userRow.active_profile_id || null,
+    subscription_status: userRow.subscription_status || null,
     created_at:        userRow.created_at,
     updated_at:        userRow.updated_at,
     profile_name:          activeProf ? (activeProf.profile_name || "")         : "",
