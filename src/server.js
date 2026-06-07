@@ -147,6 +147,7 @@ app.get("/me", requireUser, async (req, res, next) => {
       email:    req.user.email || null,
       profile:  shaped,
       plan:     planName,
+      subscription_status: (rawProfile && rawProfile.subscription_status) || null,
       features: plan.features,
       usage: {
         used:  usedThisMonth,
@@ -576,6 +577,23 @@ app.post("/subscription/cancel", requireUser, async (req, res, next) => {
     const subId = await supabase.getPaddleSubscriptionId(req.user.id);
     if (!subId) return res.status(404).json({ error: "no_subscription" });
     await paddle.cancelSubscription(subId);
+    // Reflect the scheduled cancel immediately so /me shows it before the
+    // subscription.updated webhook lands; the webhook reconciles it anyway.
+    await supabase.setSubscriptionStatus(req.user.id, "canceling");
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- POST /subscription/resume ----------
+// Undo a scheduled cancellation; the subscription continues as normal.
+app.post("/subscription/resume", requireUser, async (req, res, next) => {
+  try {
+    const subId = await supabase.getPaddleSubscriptionId(req.user.id);
+    if (!subId) return res.status(404).json({ error: "no_subscription" });
+    await paddle.resumeSubscription(subId);
+    await supabase.setSubscriptionStatus(req.user.id, "active");
     res.json({ ok: true });
   } catch (err) {
     next(err);

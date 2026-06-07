@@ -75,7 +75,7 @@ async function getProfile(userId) {
 
   const { data: userRow, error: userErr } = await sb
     .from("user_profiles")
-    .select("user_id, plan, source_language, target_language, tone, output_format, active_profile_id, created_at, updated_at")
+    .select("user_id, plan, source_language, target_language, tone, output_format, active_profile_id, subscription_status, created_at, updated_at")
     .eq("user_id", userId)
     .maybeSingle();
   if (userErr) throw new Error(`profile read failed: ${userErr.message}`);
@@ -518,6 +518,16 @@ async function getPaddleSubscriptionId(userId) {
   return data?.paddle_subscription_id || null;
 }
 
+async function setSubscriptionStatus(userId, status) {
+  const sb = getClient();
+  if (!sb) return;
+  const { error } = await sb
+    .from("user_profiles")
+    .update({ subscription_status: status })
+    .eq("user_id", userId);
+  if (error) throw new Error(`setSubscriptionStatus failed: ${error.message}`);
+}
+
 module.exports = {
   isEnabled,
   verifyAccessToken,
@@ -546,4 +556,5 @@ module.exports = {
   applySubscriptionState,
   findUserByPaddleSubscription,
   getPaddleSubscriptionId,
+  setSubscriptionStatus,
 };

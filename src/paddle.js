@@ -65,6 +65,7 @@ async function handlePaddleEvent(event) {
   const status = data.status; // active | trialing | past_due | paused | canceled
   const subId = data.id;
   const customerId = data.customerId;
+  const scheduledCancel = data.scheduledChange?.action === "cancel";
 
   const userId = await resolveUserId(event);
   if (!userId) {
@@ -75,16 +76,20 @@ async function handlePaddleEvent(event) {
   }
 
   const plan = ACTIVE_STATUSES.has(status) ? "pro" : "free";
+  // A scheduled cancellation keeps the subscription active until period end,
+  // so the underlying status stays active (plan stays pro). We surface a
+  // distinct "canceling" status so the UI can offer a Renew action.
+  const storedStatus = scheduledCancel ? "canceling" : status;
   await supabase.applySubscriptionState(userId, {
     plan,
     paddle_customer_id: customerId || null,
     paddle_subscription_id: subId || null,
-    subscription_status: status || null,
+    subscription_status: storedStatus || null,
   });
 
   // No PII, no card data — mirrors the [translate] log line style.
   console.log(
-    `[paddle] {"event":"${type}","user_id":"${userId}","status":"${status || "?"}","plan":"${plan}"}`
+    `[paddle] {"event":"${type}","user_id":"${userId}","status":"${storedStatus || "?"}","plan":"${plan}"}`
   );
 }
 
@@ -97,4 +102,11 @@ async function cancelSubscription(subscriptionId) {
   return p.subscriptions.cancel(subscriptionId, { effectiveFrom: "next_billing_period" });
 }
 
-module.exports = { getPaddle, unmarshalWebhook, handlePaddleEvent, cancelSubscription };
+// Remove a scheduled cancellation so the subscription continues normally.
+async function resumeSubscription(subscriptionId) {
+  const p = getPaddle();
+  if (!p) throw new Error("paddle_not_configured");
+  return p.subscriptions.update(subscriptionId, { scheduledChange: null });
+}
+
+module.exports = { getPaddle, unmarshalWebhook, handlePaddleEvent, cancelSubscription, resumeSubscription };
