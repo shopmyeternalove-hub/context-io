@@ -576,7 +576,14 @@ app.post("/subscription/cancel", requireUser, async (req, res, next) => {
   try {
     const subId = await supabase.getPaddleSubscriptionId(req.user.id);
     if (!subId) return res.status(404).json({ error: "no_subscription" });
-    await paddle.cancelSubscription(subId);
+    try {
+      await paddle.cancelSubscription(subId);
+    } catch (err) {
+      // If the subscription is already scheduled to cancel, Paddle locks it
+      // against further changes. That's the state we wanted anyway, so treat
+      // it as success and just sync our record below.
+      if (err?.code !== "subscription_locked_pending_changes") throw err;
+    }
     // Reflect the scheduled cancel immediately so /me shows it before the
     // subscription.updated webhook lands; the webhook reconciles it anyway.
     await supabase.setSubscriptionStatus(req.user.id, "canceling");
