@@ -207,7 +207,7 @@ const TONE_DESCRIPTIONS = {
   professional:   "Polished business register. Industry-standard terminology, no slang, no casualisms. The way a domain professional would write in a work context — confident, direct, jargon used precisely.",
   formal:         "Highly formal register. Full sentences, no contractions, respectful and reserved. Suitable for official correspondence, legal, or diplomatic contexts.",
   neutral:        "Default register. Neither casual nor formal. Plain professional prose without stylistic emphasis.",
-  conversational: "Natural spoken-style register. Contractions, everyday phrasing, friendly. Like a colleague chatting in Slack — still accurate, but relaxed.",
+  conversational: "phrase it the way a native speaker would actually say it in casual conversation — a peer in the same field talking shop, relaxed and idiomatic. Use the target language's own everyday register, colloquial phrasing, and natural rhythm rather than a literal translation of English casualness (informality and politeness levels work differently in every language). Keep domain terms and meaning precise — loosen the register, not the accuracy.",
   academic:       "Scholarly register. Precise, careful, hedged where appropriate. Field-specific terminology preserved. Suitable for papers or research notes.",
   executive:      "Senior-business register. Crisp, outcome-oriented, action-focused. Short sentences, decision-ready phrasing. Suitable for board memos or executive summaries.",
   plain:          "Plain-language register. Simplest accurate phrasing. Avoid jargon; if a domain term must appear, gloss it briefly. Suitable for a non-specialist audience.",
